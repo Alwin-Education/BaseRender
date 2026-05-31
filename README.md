@@ -4,7 +4,8 @@ BaseRender is now organized as a monorepo for a cloud render product:
 
 - `apps/api`: FastAPI app for the API, auth, render job orchestration, and serving the built React UI.
 - `apps/web`: Vite + React frontend source (built into `apps/api/static/` for production).
-- `apps/worker`: background worker process that executes prepared render jobs.
+- `apps/worker`: background worker process that executes prepared render jobs (Render.com fallback backend).
+- `apps/lambda`: AWS Lambda FFmpeg handler for hybrid-render shots, plus the EventBridge notifier Lambda.
 - `packages/baserender`: shared OTIO-to-FFmpeg renderer package.
 
 The renderer remains the stable core. The web/API/worker apps are thin scaffolds around it so future work can add queueing, storage, and NLE conversion without rewriting the existing timeline or FFmpeg logic.
@@ -29,7 +30,7 @@ Then install dependencies:
 ```sh
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e packages/baserender -e apps/api -e apps/worker "pytest>=8"
+python -m pip install -e packages/baserender -e apps/api -e apps/worker -e apps/lambda "pytest>=8"
 npm install
 ```
 
@@ -114,11 +115,22 @@ For a least-privilege AWS IAM policy template (read/write, no delete), see [`doc
 
 Set `BASERENDER_API_BASE_URL` on the worker to the public URL of the `baserender` web service.
 
-A hybrid **AWS MediaConvert + Lambda** render path is in progress. Phase 1 adds a routing engine that classifies timelines for MediaConvert vs Lambda execution; Phase 2 adds a MediaConvert JSON builder for full-render, per-shot LUT, truncation, and stitch jobs; Phase 3 adds boto3 MediaConvert/EventBridge client wrappers and a shared S3 working-directory layout. See [`docs/reference/mediaconvert-architecture.md`](docs/reference/mediaconvert-architecture.md) for the architecture, phase roadmap, and implementation log.
+### Render backends
+
+`BASERENDER_RENDER_BACKEND` selects how `POST /jobs` executes a render:
+
+- `cloud` (default): the API classifies the OTIO timeline and runs a hybrid **AWS MediaConvert + Lambda** pipeline. MediaConvert handles LUT application, transcoding, truncation, and final stitching; the `apps/lambda` FFmpeg handler renders shots MediaConvert cannot express (keyframes, compositing, dissolves). EventBridge completion events flow back through a notifier Lambda to `POST /internal/events`, and the API tracks multi-step progress (`route` and `steps`) on the job. Timelines the cloud path cannot yet handle fall back to the worker.
+- `worker`: the Render.com `baserender-worker` poll loop described above.
+
+The cloud path needs `BASERENDER_MEDIACONVERT_ROLE_ARN` (plus optional MediaConvert/EventBridge settings) and the EventBridge rule + Lambda wiring described in [`docs/reference/s3-iam-policy.md`](docs/reference/s3-iam-policy.md). See [`docs/reference/mediaconvert-architecture.md`](docs/reference/mediaconvert-architecture.md) for the full architecture, phase roadmap, and implementation log.
+
+### Direct transcode
+
+Separate from timeline renders, the web **Transcode** page (`/transcode`) and `POST /transcode` submit one fire-and-forget MediaConvert job per selected S3 file in parallel — no job store or EventBridge orchestration.
 
 ### Troubleshooting stuck jobs
 
-BaseRender stores the active job in a single S3 object (`BASERENDER_JOB_STATE_KEY`, default `baserender/jobs/current.json`). New renders are blocked while that file says `queued` or `running`.
+BaseRender stores the active job in a single S3 object (`BASERENDER_JOB_STATE_KEY`, default `baserender/jobs/current.json`). New renders are blocked while that file says `queued` or `running`. For cloud-backend jobs the same object also records the `route` and per-step `steps` list; `GET /jobs/{id}` surfaces both so you can see which MediaConvert/Lambda step stalled.
 
 If the UI reports **Another render job is already active** or **Render output not found**:
 

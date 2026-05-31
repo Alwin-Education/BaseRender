@@ -2,7 +2,7 @@
 
 Shared Python package for reading OpenTimelineIO timelines and building/running FFmpeg render commands.
 
-The package is used by the local CLI (`scripts/otio_to_ffmpeg.py`), the FastAPI backend for validation-oriented work, and the background worker for actual renders.
+The package is used by the local CLI (`scripts/otio_to_ffmpeg.py`), the FastAPI backend for validation and cloud-render orchestration, the background worker, and the AWS Lambda FFmpeg handler (`apps/lambda`) for actual renders.
 
 ## Key Modules
 
@@ -13,5 +13,9 @@ The package is used by the local CLI (`scripts/otio_to_ffmpeg.py`), the FastAPI 
 - `ffmpeg_progress.py`: parse FFmpeg `-progress` output for encode status
 - `render.py`: orchestrate load, build, and execute
 - `defaults.py`: load shared defaults from `config/defaults.json`
+- `routing.py`: classify an OTIO timeline into MediaConvert / per-shot / hybrid Lambda routes (`classify_timeline`)
+- `mediaconvert.py`: build AWS MediaConvert `CreateJob` Settings for full-render, per-shot LUT, truncation, and stitch jobs
+- `transcode.py`: output-key helpers for the direct fire-and-forget transcode path
+- `storage_layout.py`: S3 working-directory key/URI helpers for intermediate cloud-render artifacts
 
 Default render settings for the web UI and API live in repo-root `config/defaults.json`. Override the path with `BASERENDER_DEFAULTS_CONFIG`.

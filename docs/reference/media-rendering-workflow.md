@@ -23,12 +23,22 @@ Default render settings for the web UI live in `config/defaults.json` and are lo
 
 ## Cloud Render Flow
 
-The web/API/worker path reuses the same renderer package:
+Both render backends reuse the same renderer package. The backend is selected by `BASERENDER_RENDER_BACKEND` (default `cloud`).
+
+**Cloud backend (MediaConvert + Lambda, default):**
 
 - The web app uploads or selects an OTIO timeline, links media references to S3 objects, attaches LUTs, and submits `POST /jobs`.
+- The API classifies the timeline (`orchestrator.classify_job`), submits MediaConvert jobs and/or emits Lambda work, and tracks multi-step progress as `RenderStep`s in the single-slot S3 job state.
+- EventBridge completion events flow back through the notifier Lambda to `POST /internal/events`, which calls `orchestrator.advance` to mark steps, emit Lambda shots after truncation, submit the final stitch, and finalize the job.
+- The web app polls `GET /jobs/{id}` (returns `route` and `steps`) until the job succeeds or fails.
+
+**Worker backend (Render.com poll loop, fallback):**
+
 - The API stores job state in S3, prepares a worker payload with signed media URLs and artifact keys, and returns job status including progress.
-- The worker service polls `POST /worker/jobs/claim`, downloads the timeline and LUT artifacts, runs `baserender_worker.job.run_render_job`, sends encode progress through `POST /worker/jobs/{id}/heartbeat`, uploads the finished file, and completes the job with `POST /worker/jobs/{id}/complete`.
-- The web app polls `GET /jobs/current` and shows encode/upload progress until the job succeeds or fails.
+- The worker service polls `POST /worker/jobs/claim` (only returns jobs with `backend == "worker"`), downloads the timeline and LUT artifacts, runs `baserender_worker.job.run_render_job`, sends encode progress through `POST /worker/jobs/{id}/heartbeat`, uploads the finished file, and completes the job with `POST /worker/jobs/{id}/complete`.
+- Timelines that the cloud path cannot yet handle fall back to the worker.
+
+Separate from `POST /jobs`, the **direct transcode** path (`POST /transcode`, web `/transcode` page) submits one fire-and-forget MediaConvert job per selected S3 file in parallel, with no job store or EventBridge orchestration.
 
 NLE-to-OTIO conversion is not implemented yet. `POST /conversions` currently returns `not_implemented`.
 
@@ -46,7 +56,7 @@ For MediaConvert execution, `packages/baserender/src/baserender/mediaconvert.py`
 
 Working-directory S3 keys and URIs for intermediate MediaConvert outputs are built by `packages/baserender/src/baserender/storage_layout.py` (e.g. `baserender/jobs/{id}/working/proxy-{n}`, `shot-{n}`, and `final/output`). The API wraps boto3 clients in `apps/api/src/baserender_api/mediaconvert_client.py` and `eventbridge_client.py`; configure them with `BASERENDER_MEDIACONVERT_ROLE_ARN`, optional `BASERENDER_MEDIACONVERT_QUEUE_ARN` and `BASERENDER_MEDIACONVERT_ENDPOINT`, and optional `BASERENDER_EVENT_BUS` / `BASERENDER_EVENT_SOURCE`.
 
-The API does not call the routing engine, submit MediaConvert jobs, or publish EventBridge events from `POST /jobs` yet (Phase 5). See [`mediaconvert-architecture.md`](mediaconvert-architecture.md) for the full design, phase roadmap, and implementation log. **When completing a phase, update that document's phase status and implementation log in the same change.**
+`POST /jobs` now drives this routing through `apps/api/src/baserender_api/orchestrator.py` when `BASERENDER_RENDER_BACKEND=cloud`, and the Lambda FFmpeg handler in `apps/lambda` runs hybrid shots. See [`mediaconvert-architecture.md`](mediaconvert-architecture.md) for the full design, phase roadmap, and implementation log. **When completing a phase, update that document's phase status and implementation log in the same change.**
 
 ## Change Strategy
 
