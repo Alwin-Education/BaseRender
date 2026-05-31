@@ -1,0 +1,47 @@
+{
+  "video": [
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".avi",
+    ".mkv",
+    ".webm",
+    ".wmv",
+    ".flv",
+    ".mpg",
+    ".mpeg",
+    ".mxf",
+    ".ts",
+    ".m2ts",
+    ".3gp",
+    ".ogv"
+  ],
+  "still_image": [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".gif",
+    ".heic",
+    ".heif",
+    ".avif",
+    ".dpx",
+    ".exr"
+  ],
+  "audio": [
+    ".wav",
+    ".aiff",
+    ".aif",
+    ".mp3",
+    ".aac",
+    ".m4a",
+    ".flac",
+    ".ogg",
+    ".opus",
+    ".wma",
+    ".caf"
+  ]
+}

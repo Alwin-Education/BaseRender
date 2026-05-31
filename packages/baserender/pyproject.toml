@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "baserender"
+version = "0.1.0"
+description = "Script-first OTIO to FFmpeg render prototype."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "opentimelineio>=0.17,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

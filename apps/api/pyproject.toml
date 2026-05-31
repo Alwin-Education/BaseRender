@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "baserender-api"
+version = "0.1.0"
+description = "FastAPI backend for BaseRender."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "baserender",
+    "boto3",
+    "fastapi",
+    "pydantic",
+    "python-dotenv>=1.0.0",
+    "rapidfuzz",
+    "uvicorn[standard]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx",
+    "pytest>=8",
+]

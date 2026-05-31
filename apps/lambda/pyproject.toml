@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "baserender-lambda"
+version = "0.1.0"
+description = "AWS Lambda FFmpeg handler for BaseRender hybrid render shots."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "baserender",
+    "boto3",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+baserender-lambda = "baserender_lambda.main:main"

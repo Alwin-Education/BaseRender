@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "baserender-worker"
+version = "0.1.0"
+description = "Background worker for executing BaseRender render jobs."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "baserender",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+baserender-worker = "baserender_worker.main:main"

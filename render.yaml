@@ -1,0 +1,64 @@
+services:
+  - type: web
+    name: baserender
+    runtime: python
+    plan: starter
+    buildCommand: |
+      cd apps/web && npm install && npm run build &&
+      rm -rf ../api/static && cp -r dist ../api/static &&
+      pip install -e packages/baserender -e apps/api
+    startCommand: uvicorn baserender_api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: BASERENDER_MEDIA_PROVIDER
+        value: s3
+      - key: BASERENDER_S3_BUCKET
+        sync: false
+      - key: BASERENDER_AUTH_PASSWORD
+        sync: false
+      - key: BASERENDER_SESSION_SECRET
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_REGION
+        sync: false
+      - key: BASERENDER_WORKER_TOKEN
+        sync: false
+      - key: BASERENDER_ARTIFACT_PREFIX
+        value: baserender
+      - key: BASERENDER_JOB_STATE_KEY
+        value: baserender/jobs/current.json
+      - key: BASERENDER_JOB_STALE_SECONDS
+        value: 3600
+      - key: BASERENDER_OUTPUT_PREFIX
+        value: outputs
+      - key: BASERENDER_MEDIACONVERT_ROLE_ARN
+        sync: false
+      - key: BASERENDER_MEDIACONVERT_QUEUE_ARN
+        sync: false
+      - key: BASERENDER_MEDIACONVERT_ENDPOINT
+        sync: false
+      - key: BASERENDER_EVENT_BUS
+        value: default
+      - key: BASERENDER_EVENT_SOURCE
+        value: baserender
+      - key: BASERENDER_RENDER_BACKEND
+        value: cloud
+
+  - type: worker
+    name: baserender-worker
+    runtime: docker
+    plan: starter
+    dockerContext: .
+    dockerfilePath: apps/worker/Dockerfile
+    envVars:
+      - key: BASERENDER_WORKER_IDLE_SECONDS
+        value: 60
+      - key: BASERENDER_API_BASE_URL
+        sync: false
+      - key: BASERENDER_WORKER_TOKEN
+        sync: false

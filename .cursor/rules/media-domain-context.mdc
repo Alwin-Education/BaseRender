@@ -1,0 +1,19 @@
+---
+description: OTIO and FFmpeg context for BaseRender agents
+alwaysApply: true
+---
+
+# Media Domain Context
+
+BaseRender converts OpenTimelineIO timelines into FFmpeg render commands. When changing code that reads OTIO, resolves timeline items/effects, builds filtergraphs, or renders media, first consult the project reference notes:
+
+- `docs/reference/otio-python-api.md`
+- `docs/reference/otio-format-notes.md`
+- `docs/reference/ffmpeg-filtergraphs.md`
+- `docs/reference/media-rendering-workflow.md`
+
+Use the official `opentimelineio` Python API instead of inferring OTIO structure from raw JSON when possible. Preserve OTIO concepts such as `Timeline`, `Stack`, `Track`, `Clip`, `Gap`, `Transition`, `ExternalReference`, `RationalTime`, and `TimeRange`.
+
+Treat FFmpeg command construction as filtergraph design. Keep inputs, labels, stream mapping, timestamps, and concat compatibility explicit and covered by tests.
+
+If Cursor `@Docs` entries are available for OpenTimelineIO or FFmpeg, use them for API details before implementing new media features.

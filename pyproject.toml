@@ -1,0 +1,42 @@
+[project]
+name = "baserender-monorepo"
+version = "0.1.0"
+description = "Monorepo for the BaseRender web app, API, worker, and renderer package."
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "baserender",
+    "boto3",
+    "fastapi",
+    "pydantic",
+    "python-dotenv>=1.0.0",
+    "rapidfuzz",
+    "uvicorn[standard]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx",
+    "pytest>=8",
+]
+
+[tool.uv.sources]
+baserender = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "packages/baserender",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "packages/baserender/tests",
+    "apps/api/tests",
+    "apps/worker/tests",
+    "apps/lambda/tests",
+]
+pythonpath = [
+    "packages/baserender/src",
+    "apps/api/src",
+    "apps/worker/src",
+    "apps/lambda/src",
+]

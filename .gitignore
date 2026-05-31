@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+output.mp4
+node_modules/
+.next/
+dist/
+apps/api/static/
+build/
+*.egg-info/
+apps/api/.env
+apps/worker/.env
+apps/web/.env
+
+# Local runtime job artifacts (inputs, reports, job state) - may contain
+# local file paths and presigned media URLs; never commit these.
+.baserender/

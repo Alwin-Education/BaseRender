@@ -1,0 +1,14 @@
+{
+  "media_prefix": "test/",
+  "output_path": "outputs/output.mp4",
+  "container": "mp4",
+  "width": 1920,
+  "height": 1080,
+  "fps": 24,
+  "video_codec": "h264",
+  "video_bitrate": 8000000,
+  "video_preset": "faster",
+  "video_faststart": true,
+  "audio_codec": "aac",
+  "audio_bitrate": 192000
+}
