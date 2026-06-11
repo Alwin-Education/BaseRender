@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: BaseRender Phase 2 dev stack (S3, IAM, MediaConvert role)
+
+Parameters:
+  BucketName:
+    Type: String
+    Description: Globally unique S3 bucket name for BaseRender dev media and artifacts
+
+Resources:
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  MediaConvertRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: BaseRenderMediaConvertRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: mediaconvert.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BaseRenderMediaConvertS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt MediaBucket.Arn
+                  - !Sub "${MediaBucket.Arn}/*"
+
+  ApiUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: baserender-api-dev
+      Policies:
+        - PolicyName: BaseRenderApiDevAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt MediaBucket.Arn
+              - Sid: ReadWriteObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${MediaBucket.Arn}/*"
+              - Sid: MediaConvertJobControl
+                Effect: Allow
+                Action:
+                  - mediaconvert:CreateJob
+                  - mediaconvert:GetJob
+                  - mediaconvert:DescribeEndpoints
+                  - mediaconvert:ListQueues
+                Resource: "*"
+              - Sid: PassMediaConvertRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt MediaConvertRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: mediaconvert.amazonaws.com
+              - Sid: PublishOrchestrationEvents
+                Effect: Allow
+                Action: events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default"
+              - Sid: ManageLambdaDev
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:AddPermission
+                  - lambda:PublishLayerVersion
+                  - lambda:ListLayerVersions
+                Resource: "*"
+              - Sid: ManageEventBridgeDev
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:DescribeRule
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/*"
+              - Sid: ManageIamRolesDev
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:GetRole
+                  - iam:PutRolePolicy
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/BaseRenderLambdaExecutionRole"
+
+  ApiAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref ApiUser
+
+Outputs:
+  BucketName:
+    Value: !Ref BucketName
+  MediaConvertRoleArn:
+    Value: !GetAtt MediaConvertRole.Arn
+  ApiAccessKeyId:
+    Value: !Ref ApiAccessKey
+  ApiSecretAccessKey:
+    Value: !GetAtt ApiAccessKey.SecretAccessKey
+  Region:
+    Value: !Ref AWS::Region

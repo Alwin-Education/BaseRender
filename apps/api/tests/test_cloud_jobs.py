@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,6 +11,8 @@ from baserender_api.app import app
 from baserender.media_inventory import load_media_inventory_from_text
 
 from conftest import TEST_S3_BUCKET
+
+FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 
 
 class FakeMediaConvertClient:
@@ -159,6 +162,96 @@ def test_internal_event_advances_full_mediaconvert_job(
     assert payload["status"] == "succeeded"
     assert payload["steps"][0]["status"] == "succeeded"
     assert payload["output"]["key"].endswith("output.mp4")
+
+
+def test_cloud_job_per_shot_mediaconvert_route(
+    authenticated_client: TestClient,
+    cloud_env: None,
+) -> None:
+    otio_text = (FIXTURES / "two_clip.otio").read_text(encoding="utf-8")
+    inventory = load_media_inventory_from_text(otio_text)
+    references = inventory.entries
+    assert len(references) == 2
+
+    response = authenticated_client.post(
+        "/jobs",
+        json={
+            "output_path": "output.mp4",
+            "dry_run": False,
+            "settings": {"width": 1920, "height": 1080, "fps": 24},
+            "otio_content_base64": _base64_text(otio_text),
+            "media_references": [
+                {
+                    "id": reference.id,
+                    "clip_name": reference.clip_name,
+                    "normalized_url": reference.normalized_url,
+                }
+                for reference in references
+            ],
+            "media_assignments": {
+                references[0].id: "test/Shot_A.mov",
+                references[1].id: "test/Shot_B.mov",
+            },
+            "lut_files": [
+                {"id": "lut-a", "name": "a.cube", "content_base64": _base64_text("lut-a")},
+                {"id": "lut-b", "name": "b.cube", "content_base64": _base64_text("lut-b")},
+            ],
+            "lut_assignments": {
+                references[0].id: "lut-a",
+                references[1].id: "lut-b",
+            },
+        },
+    )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["route"] == "per_shot_mediaconvert"
+    assert {step["kind"] for step in payload["steps"]} == {"per_shot_lut", "stitch"}
+    assert len([step for step in payload["steps"] if step["kind"] == "per_shot_lut"]) == 2
+
+
+def test_cloud_job_hybrid_route(
+    authenticated_client: TestClient,
+    cloud_env: None,
+) -> None:
+    otio_text = (FIXTURES / "hybrid.otio").read_text(encoding="utf-8")
+    inventory = load_media_inventory_from_text(otio_text)
+    references = inventory.entries
+    assert len(references) == 2
+
+    response = authenticated_client.post(
+        "/jobs",
+        json={
+            "output_path": "output.mp4",
+            "dry_run": False,
+            "settings": {"width": 1920, "height": 1080, "fps": 24},
+            "otio_content_base64": _base64_text(otio_text),
+            "media_references": [
+                {
+                    "id": reference.id,
+                    "clip_name": reference.clip_name,
+                    "normalized_url": reference.normalized_url,
+                }
+                for reference in references
+            ],
+            "media_assignments": {
+                references[0].id: "test/Shot_A.mov",
+                references[1].id: "test/Shot_B.mov",
+            },
+            "lut_files": [
+                {"id": "lut-b", "name": "b.cube", "content_base64": _base64_text("lut-b")},
+            ],
+            "lut_assignments": {
+                references[1].id: "lut-b",
+            },
+        },
+    )
+
+    assert response.status_code == 202, response.json()
+    payload = response.json()
+    assert payload["route"] == "hybrid"
+    assert any(step["kind"] == "stitch" for step in payload["steps"])
+    assert any(step["backend"] == "lambda" for step in payload["steps"])
 
 
 def _base64_text(value: str) -> str:

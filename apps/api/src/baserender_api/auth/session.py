@@ -40,6 +40,22 @@ def get_auth_config() -> AuthConfig:
     )
 
 
+def is_valid_proxy_bearer(authorization: str | None) -> bool:
+    """Accept the shared token the Next.js middleware injects after Cognito auth.
+
+    The web tier authenticates users against Cognito and forwards API calls with
+    `Authorization: Bearer <BASERENDER_PROXY_TOKEN>`; an empty/unset env var
+    disables this path entirely.
+    """
+    expected = os.getenv("BASERENDER_PROXY_TOKEN", "")
+    if not expected or not authorization:
+        return False
+    scheme, _, candidate = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not candidate:
+        return False
+    return secrets.compare_digest(candidate, expected)
+
+
 def password_matches(candidate: str, config: AuthConfig | None = None) -> bool:
     config = config or get_auth_config()
     return secrets.compare_digest(candidate, config.password)

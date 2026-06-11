@@ -3,12 +3,14 @@
 BaseRender is now organized as a monorepo for a cloud render product:
 
 - `apps/api`: FastAPI app for the API, auth, render job orchestration, and serving the built React UI.
-- `apps/web`: Vite + React frontend source (built into `apps/api/static/` for production).
+- `apps/web`: Next.js frontend (App Router, Tailwind, shadcn/ui).
 - `apps/worker`: background worker process that executes prepared render jobs (Render.com fallback backend).
 - `apps/lambda`: AWS Lambda FFmpeg handler for hybrid-render shots, plus the EventBridge notifier Lambda.
 - `packages/baserender`: shared OTIO-to-FFmpeg renderer package.
 
 The renderer remains the stable core. The web/API/worker apps are thin scaffolds around it so future work can add queueing, storage, and NLE conversion without rewriting the existing timeline or FFmpeg logic.
+
+For the overall product direction (Amplify UI, unified Lambda backend, validation checklist), see [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Requirements
 
@@ -42,19 +44,55 @@ Start the API (loads `apps/api/.env`, then repo-root `.env` if present):
 uvicorn baserender_api.app:app --reload
 ```
 
-Start the web app dev server (proxies `/auth`, `/media`, and `/jobs` to the API on port 8000):
+Start the web app dev server (rewrites `/media`, `/jobs`, and `/transcode` to the API on port 8000):
 
 ```sh
 npm run web:dev
 ```
 
-Open http://localhost:5173 for the UI during development.
+Open http://localhost:3000 for the UI during development.
 
-To run the unified production layout locally, build the frontend and copy it into the API static directory:
+### Authentication
+
+The web UI signs users in against the shared Cognito user pool (passwordless email
+OTP, per-app roles via `baserender:*` groups) using the Auth.js layer described in
+[`docs/reference/auth-cognito.md`](docs/reference/auth-cognito.md). One-time setup
+for a new environment:
+
+```sh
+scripts/aws/setup-cognito.sh baserender [https://your-amplify-domain]
+```
+
+Paste the six printed vars into `apps/web/.env.local` (with `AUTH_URL=http://localhost:3000`
+for local dev). Then pick a shared secret and set `BASERENDER_PROXY_TOKEN` to the same
+value in both `apps/web/.env.local` and `apps/api/.env` — after Cognito sign-in, the
+Next.js middleware forwards API calls with that bearer token instead of the legacy
+FastAPI session cookie.
+
+### Phase 2 validation
+
+After `aws configure` (one-time for a new AWS account):
+
+```sh
+python scripts/aws/bootstrap_local_env.py
+python scripts/aws/provision_stack.py --bucket-name baserender-dev-UNIQUE
+python scripts/aws/setup_dev.py
+npm run phase2:test
+# Terminal 1: uvicorn baserender_api.app:app --host 0.0.0.0 --port 8000
+# Terminal 2: npm run web:dev
+# Terminal 3: scripts/aws/start_tunnel.sh  → python scripts/aws/update_notifier_url.py https://YOUR-TUNNEL-URL
+python scripts/phase2_validate.py
+```
+
+Or run `scripts/phase2_run.sh` for bootstrap + tests + local checks.
+
+> **Note:** The FastAPI static UI copy step below is legacy (Render.com deploy). Local development uses the Next.js dev server on port 3000. Production UI deploy is planned for Amplify (see [`docs/roadmap.md`](docs/roadmap.md)).
+
+To run the legacy unified production layout locally (Render.com path only), build the frontend and copy it into the API static directory:
 
 ```sh
 npm run web:build
-rm -rf apps/api/static && cp -r apps/web/dist apps/api/static
+# Legacy Render path — Next.js output is not copied to apps/api/static. Use Amplify for UI deploy.
 uvicorn baserender_api.app:app --reload
 ```
 

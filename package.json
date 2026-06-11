@@ -9,6 +9,9 @@
     "web:dev": "npm --workspace apps/web run dev",
     "web:build": "npm --workspace apps/web run build",
     "web:preview": "npm --workspace apps/web run preview",
-    "web:test": "npm --workspace apps/web run test"
+    "web:test": "npm --workspace apps/web run test",
+    "phase2:test": "python -m pytest && npm run web:test",
+    "phase2:validate": "python scripts/phase2_validate.py",
+    "phase2:aws:setup": "python scripts/aws/setup_dev.py"
   }
 }

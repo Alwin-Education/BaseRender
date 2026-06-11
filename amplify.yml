@@ -1,0 +1,26 @@
+# AWS Amplify Hosting — Next.js SSR app in the apps/web workspace of this monorepo.
+# Connect the repo in the Amplify console and set the app root to apps/web; this
+# spec is picked up automatically.
+version: 1
+applications:
+  - appRoot: apps/web
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            # Workspace install — the lockfile lives at the repo root.
+            - (cd ../.. && npm ci)
+            # Next.js SSR on Amplify: console env vars are not in the Lambda runtime
+            # unless written into a Next env file before build (see AWS SSR env var docs).
+            - env | grep -e COGNITO_CLIENT_ID -e COGNITO_CLIENT_SECRET -e COGNITO_ISSUER -e AUTH_SECRET -e AUTH_URL -e AUTH_TRUST_HOST -e BASERENDER_API_PROXY_TARGET -e BASERENDER_PROXY_TOKEN >> .env.production
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: .next
+        files:
+          - "**/*"
+      cache:
+        paths:
+          - ../../node_modules/**/*
+          - .next/cache/**/*

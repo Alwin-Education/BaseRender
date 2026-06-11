@@ -10,7 +10,11 @@ import opentimelineio as otio
 from baserender.media_inventory import load_timeline_from_text
 
 from baserender_api.auth.routes import router as auth_router
-from baserender_api.auth.session import get_auth_config, is_valid_session_token
+from baserender_api.auth.session import (
+    get_auth_config,
+    is_valid_proxy_bearer,
+    is_valid_session_token,
+)
 from baserender_api.job_store import ActiveJobExistsError, get_job_store
 from baserender_api.media.provider import get_media_provider
 from baserender_api.media.prefix import validate_media_object_key
@@ -75,6 +79,9 @@ async def require_session(request: Request, call_next):
     if request.url.path.startswith(_WORKER_PATH_PREFIX):
         return await call_next(request)
     if request.url.path.startswith(_INTERNAL_PATH_PREFIX):
+        return await call_next(request)
+
+    if is_valid_proxy_bearer(request.headers.get("authorization")):
         return await call_next(request)
 
     try:

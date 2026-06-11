@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useRef, useState } from "react";
 import { XIcon } from "lucide-react";
 
@@ -102,7 +104,7 @@ export function HomePage() {
   const [videoFaststart, setVideoFaststart] = useState(true);
   const [audioCodec, setAudioCodec] = useState<AudioCodec>("aac");
   const [audioBitrate, setAudioBitrate] = useState(192_000);
-  const [dryRun, setDryRun] = useState(false);
+  const [dryRun] = useState(false);
   const lastRenderProgressRef = useRef<RenderJobStatus["progress"]>(null);
 
   useEffect(() => {

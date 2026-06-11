@@ -79,6 +79,39 @@ def test_protected_routes_require_auth() -> None:
     assert media_response.status_code == 401
 
 
+def test_proxy_bearer_token_allows_protected_routes(monkeypatch) -> None:
+    monkeypatch.setenv("BASERENDER_PROXY_TOKEN", "proxy-secret")
+    client = TestClient(app)
+
+    response = client.get(
+        "/media/config", headers={"Authorization": "Bearer proxy-secret"}
+    )
+
+    assert response.status_code == 200
+
+
+def test_proxy_bearer_token_rejects_wrong_token(monkeypatch) -> None:
+    monkeypatch.setenv("BASERENDER_PROXY_TOKEN", "proxy-secret")
+    client = TestClient(app)
+
+    response = client.get(
+        "/media/config", headers={"Authorization": "Bearer wrong-token"}
+    )
+
+    assert response.status_code == 401
+
+
+def test_proxy_bearer_token_disabled_when_unset(monkeypatch) -> None:
+    monkeypatch.delenv("BASERENDER_PROXY_TOKEN", raising=False)
+    client = TestClient(app)
+
+    response = client.get(
+        "/media/config", headers={"Authorization": "Bearer proxy-secret"}
+    )
+
+    assert response.status_code == 401
+
+
 def test_login_rejects_invalid_password() -> None:
     client = TestClient(app)
 

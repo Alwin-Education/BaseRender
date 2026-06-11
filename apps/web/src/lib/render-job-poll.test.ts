@@ -15,6 +15,7 @@ function job(
       output_path: "outputs/output.mp4",
     },
     worker_payload: {},
+    report: null,
     ...overrides,
   };
 }
