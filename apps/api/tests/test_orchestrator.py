@@ -108,7 +108,7 @@ def test_start_render_full_route_submits_one_mediaconvert_job() -> None:
     assert mc.jobs[0]["user_metadata"] == {"job_id": "job-1", "step_id": "full"}
 
 
-def test_start_render_per_shot_route_submits_lut_jobs_and_pending_stitch() -> None:
+def test_start_render_lut_route_submits_truncations_and_pending_stitch() -> None:
     routing = classify_timeline(
         _simple_plan(
             ClipSegment(
@@ -140,9 +140,13 @@ def test_start_render_per_shot_route_submits_lut_jobs_and_pending_stitch() -> No
 
     steps = start_render("job-1", job, routing, artifacts, mediaconvert=mc, bucket="test-bucket")
 
-    assert routing.route is RouteKind.PER_SHOT_MEDIACONVERT
+    # LUT shots route to Lambda (MediaConvert skips same-color-space LUTs):
+    # truncation proxies submit first, lambda shots and stitch wait on them.
+    assert routing.route is RouteKind.HYBRID
     assert len(mc.jobs) == 2
-    assert {step.kind for step in steps} == {"per_shot_lut", "stitch"}
+    assert {step.kind for step in steps} == {"truncation", "lambda_shot", "stitch"}
+    assert all(step.status == "running" for step in steps if step.kind == "truncation")
+    assert all(step.status == "pending" for step in steps if step.kind == "lambda_shot")
     stitch = next(step for step in steps if step.kind == "stitch")
     assert stitch.status == "pending"
 

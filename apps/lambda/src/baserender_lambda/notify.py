@@ -12,6 +12,8 @@ def emit_shot_complete_event(
     output_key: str,
     status: str,
     bucket: str | None = None,
+    error_message: str | None = None,
+    error_detail: str | None = None,
 ) -> str | None:
     """Publish a BaseRender Shot Complete event when EventBridge is configured."""
     if not os.getenv("BASERENDER_EVENT_BUS"):
@@ -27,6 +29,10 @@ def emit_shot_complete_event(
     }
     if bucket:
         detail["bucket"] = bucket
+    if error_message:
+        detail["error_message"] = error_message
+    if error_detail:
+        detail["error_detail"] = error_detail
 
     client = boto3.client(
         "events",

@@ -42,9 +42,10 @@ print(json.dumps(merged))
 PY
 )
 
+# Print only the keys, never the values — secrets must not echo to the terminal.
 aws amplify update-app --app-id "$AMPLIFY_APP_ID" \
   --environment-variables "$MERGED" \
-  --query 'app.environmentVariables' --output table \
+  --query 'keys(app.environmentVariables)' --output table \
   --region "$REGION" --profile "$PROFILE"
 
 echo "Done. Trigger a redeploy for the new vars to take effect." >&2

@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response
 import opentimelineio as otio
+from baserender.lut import normalize_cube_bytes
 from baserender.media_inventory import load_timeline_from_text
 
 from baserender_api.auth.routes import router as auth_router
@@ -14,6 +15,12 @@ from baserender_api.auth.session import (
     get_auth_config,
     is_valid_proxy_bearer,
     is_valid_session_token,
+)
+from baserender_api.internal_events import (
+    InternalEventConflict,
+    InternalEventInvalid,
+    InternalEventJobNotFound,
+    process_internal_event,
 )
 from baserender_api.job_store import ActiveJobExistsError, get_job_store
 from baserender_api.media.provider import get_media_provider
@@ -23,14 +30,12 @@ from baserender_api.defaults import allowed_media_prefix
 from baserender_api.mediaconvert_client import get_mediaconvert_client
 from baserender_api.eventbridge_client import get_eventbridge_client
 from baserender_api.orchestrator import (
-    AdvanceResult,
     build_classification_settings,
     build_cloud_artifacts,
     classify_job,
     routing_to_payload,
     should_use_cloud_backend,
     start_render,
-    advance as advance_render,
 )
 from baserender_api.output_storage import (
     get_output_store,
@@ -77,6 +82,11 @@ async def require_session(request: Request, call_next):
     if request.url.path in _PUBLIC_PATHS:
         return await call_next(request)
     if request.url.path.startswith(_WORKER_PATH_PREFIX):
+        if os.getenv("BASERENDER_DISABLE_WORKER_ROUTES"):
+            return JSONResponse(
+                status_code=status.HTTP_410_GONE,
+                content={"detail": "Worker routes are disabled in the cloud backend."},
+            )
         return await call_next(request)
     if request.url.path.startswith(_INTERNAL_PATH_PREFIX):
         return await call_next(request)
@@ -239,37 +249,17 @@ def handle_internal_event(
     request: Request,
 ) -> RenderJobStatus:
     _require_worker_token(request)
-    store = get_job_store()
-    job = store.get(payload.job_id)
-    if job is None or job.backend != "cloud":
-        raise HTTPException(status_code=404, detail="Render job not found.")
-    if job.status not in {"queued", "running"}:
+    try:
+        return process_internal_event(payload)
+    except InternalEventJobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InternalEventConflict as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Render job is not active.",
-        )
-
-    try:
-        result: AdvanceResult = advance_render(
-            job,
-            payload,
-            mediaconvert=get_mediaconvert_client(),
-            eventbridge=get_eventbridge_client(),
-        )
-    except ValueError as exc:
+            detail=str(exc),
+        ) from exc
+    except InternalEventInvalid as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    updated = store.set_steps(
-        job.id,
-        result.job.steps,
-        status=result.job.status,
-        output=result.job.output,
-        error=result.job.error,
-        report=result.job.report,
-    )
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Render job not found.")
-    return updated
 
 
 @app.get("/worker/jobs/{job_id}/artifacts/input")
@@ -427,7 +417,10 @@ def _prepare_cloud_submission(
     store.put_bytes(_input_key(job_id), prepared_otio.encode("utf-8"))
 
     for lut in job.lut_files:
-        store.put_bytes(_lut_key(job_id, lut.id), base64.b64decode(lut.content_base64))
+        store.put_bytes(
+            _lut_key(job_id, lut.id),
+            normalize_cube_bytes(base64.b64decode(lut.content_base64)),
+        )
 
     classification_settings = build_classification_settings(job, cloud_artifacts.clip_lut_artifacts)
     routing = classify_job(
@@ -475,7 +468,10 @@ def _prepare_worker_payload(job_id: str, job: RenderJobCreate) -> dict:
 
     lut_artifacts = []
     for lut in job.lut_files:
-        store.put_bytes(_lut_key(job_id, lut.id), base64.b64decode(lut.content_base64))
+        store.put_bytes(
+            _lut_key(job_id, lut.id),
+            normalize_cube_bytes(base64.b64decode(lut.content_base64)),
+        )
         lut_artifacts.append({"id": lut.id, "name": lut.name})
 
     payload["input_path"] = f"artifact://jobs/{job_id}/input.otio"

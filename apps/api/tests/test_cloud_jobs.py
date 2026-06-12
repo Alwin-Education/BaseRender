@@ -44,6 +44,14 @@ def cloud_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "baserender_api.app.get_eventbridge_client",
         lambda: FakeEventBridgeClient(),
     )
+    monkeypatch.setattr(
+        "baserender_api.internal_events.get_mediaconvert_client",
+        lambda: FakeMediaConvertClient(),
+    )
+    monkeypatch.setattr(
+        "baserender_api.internal_events.get_eventbridge_client",
+        lambda: FakeEventBridgeClient(),
+    )
 
 
 def test_cloud_job_returns_route_and_steps(
@@ -205,9 +213,11 @@ def test_cloud_job_per_shot_mediaconvert_route(
 
     assert response.status_code == 202
     payload = response.json()
-    assert payload["route"] == "per_shot_mediaconvert"
-    assert {step["kind"] for step in payload["steps"]} == {"per_shot_lut", "stitch"}
-    assert len([step for step in payload["steps"] if step["kind"] == "per_shot_lut"]) == 2
+    # LUT shots render on Lambda (MediaConvert skips same-color-space LUTs),
+    # so a two-LUT timeline becomes hybrid: truncate -> lambda shot -> stitch.
+    assert payload["route"] == "hybrid"
+    assert {step["kind"] for step in payload["steps"]} == {"truncation", "lambda_shot", "stitch"}
+    assert len([step for step in payload["steps"] if step["kind"] == "lambda_shot"]) == 2
 
 
 def test_cloud_job_hybrid_route(

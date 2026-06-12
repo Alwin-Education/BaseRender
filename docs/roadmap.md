@@ -236,30 +236,30 @@ Pick one (document in backend repo README):
 
 ### 3.3 Unified Lambda handler
 
-- [ ] Single entry: `lambda_handler` routes HTTP (API Gateway), EventBridge, and direct invoke.
-- [ ] Port FastAPI route handlers: auth, media, jobs, transcode, health.
-- [ ] Port `handler.py` (shot render) and `notifier.py` (advance on MC/shot complete).
-- [ ] **Drop `/internal/events` HTTP callback** — EventBridge invokes the same Lambda directly.
+- [x] Single entry: `baserender_lambda.unified.lambda_handler` routes HTTP (Function URL), EventBridge, and direct invoke.
+- [x] FastAPI route handlers served via **Mangum** (app kept, not rewritten): auth, media, jobs, transcode, health.
+- [x] `handler.py` (shot render) reused for `"BaseRender Lambda Shot"` events; `notifier.py` normalization reused with **in-process advance** (`baserender_api.internal_events.process_internal_event`).
+- [x] **Drop `/internal/events` HTTP callback** — EventBridge invokes the same Lambda directly (route kept for manual replay).
 
 ### 3.4 API Gateway (dev)
 
-- [ ] HTTP API in front of Lambda.
-- [ ] CORS open for `localhost:*` during Phase 4.
+- [x] ~~HTTP API~~ **Lambda Function URL** in front of the Lambda (decision changed — simpler, free; revisit API Gateway in Phase 8 if custom domains/WAF needed).
+- [x] No CORS needed: Next.js rewrites proxy server-side (`BASERENDER_API_PROXY_TARGET`).
 
 ### 3.5 Packaging
 
-- [ ] FFmpeg Lambda layer (`build_zip.sh`).
-- [ ] Memory / timeout tuning; document `/tmp` and 15-minute limits.
+- [x] FFmpeg Lambda layer (`baserender-ffmpeg:1`); `build_zip.sh` now bundles `baserender_api` + mangum with **manylinux/cp312 wheels** (host-built darwin wheels no longer leak into the zip).
+- [x] `baserender-backend`: 2048 MB, 900 s timeout, 4 GB ephemeral `/tmp`.
 
 ### 3.6 Backend tests
 
-- [ ] Port `apps/api/tests`, `apps/lambda/tests`, `packages/baserender/tests`.
-- [ ] Router integration tests with synthetic API Gateway + EventBridge payloads.
+- [x] Suites unchanged in the monorepo (`python -m pytest` covers api/lambda/renderer).
+- [x] Router integration tests with synthetic Function URL + EventBridge payloads (`apps/lambda/tests/test_unified.py`, `apps/api/tests/test_internal_events.py`).
 
 ### 3.7 Cloud-only backend
 
-- [ ] **No worker routes** in the target Lambda (`/worker/*` removed or stubbed as 410).
-- [ ] `BASERENDER_RENDER_BACKEND=cloud` only — Render poll loop is not ported.
+- [x] `/worker/*` stubbed as 410 when `BASERENDER_DISABLE_WORKER_ROUTES` is set (set on the Lambda; local dev unaffected).
+- [x] `BASERENDER_RENDER_BACKEND=cloud` on the Lambda — Render poll loop is not ported.
 
 **Exit criteria:** Backend repo deploys to AWS dev; health + auth + media + jobs + transcode callable via API Gateway URL.
 
@@ -361,6 +361,7 @@ Convention: add a row when a **roadmap phase** completes. Technical MediaConvert
 | 2026-06-01 | 1 | Migrated `apps/web` from Vite to Next.js App Router; dev rewrites to FastAPI; React Router → `next/navigation`. |
 | 2026-06-01 | 2 | Phase 2 validation: 243 pytest + 7 Vitest green; OTIO fixtures; AWS setup scripts (`provision_stack.py`, `setup_dev.py`); cloud route API tests; local login/CLI validate. Live AWS deploy pending `aws configure`. |
 | 2026-06-11 | — | Cognito SSO layer (Auth.js v5, shared pool, `baserender:*` groups) replaces the password login in `apps/web`; FastAPI accepts the `BASERENDER_PROXY_TOKEN` bearer bridge; Amplify build spec + setup scripts added. |
+| 2026-06-11 | 3 | Unified Lambda backend deployed (`baserender-backend`, eu-west-1). Deviations from the original plan: **monorepo retained** (no repo split — Amplify stays connected to this repo), **Mangum wraps the existing FastAPI app** instead of a native payload router, and a **Lambda Function URL** fronts HTTP instead of API Gateway. EventBridge events are handled in-process (`baserender_lambda.unified`; the notifier HTTP hop to `/internal/events` is gone). Worker routes return 410 via `BASERENDER_DISABLE_WORKER_ROUTES`. Legacy `baserender-render`/`baserender-notifier` Lambdas pending decommission after E2E (`setup_dev.py --cleanup-legacy`). |
 
 ---
 

@@ -22,6 +22,11 @@ LAMBDA_ON_STATIC_CROP = True
 LAMBDA_ON_OPACITY = True
 LAMBDA_ON_DISSOLVE = True
 LAMBDA_ON_MULTI_TRACK = True
+# MediaConvert's ColorConversion3DLUTSettings only engages during a genuine
+# color-space conversion (e.g. 601->709); same-space creative grades are
+# silently skipped (verified empirically against the live API, 2026-06-12).
+# FFmpeg's lut3d filter applies them correctly, so LUT shots go to Lambda.
+LAMBDA_ON_LUT = True
 
 
 class RouteKind(Enum):
@@ -203,5 +208,7 @@ def _lambda_reasons(
         and LAMBDA_ON_OPACITY
     ):
         reasons.append("opacity")
+    if clip.lut_path is not None and LAMBDA_ON_LUT:
+        reasons.append("lut")
 
     return tuple(reasons)

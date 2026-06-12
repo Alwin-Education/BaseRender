@@ -40,7 +40,8 @@ class FakeS3Io:
         self.downloads: list[tuple[str, Path]] = []
         self.uploads: list[tuple[Path, str]] = []
         self.objects: dict[str, bytes] = {
-            "baserender/jobs/job-1/working/proxy-1": b"proxy-bytes",
+            # MediaConvert writes the truncated proxy with the container extension.
+            "baserender/jobs/job-1/working/proxy-1.mp4": b"proxy-bytes",
             "baserender/jobs/job-1/inputs/timeline.otio": otio_bytes,
             "baserender/jobs/job-1/inputs/luts/lut-1": b"LUT",
         }
@@ -103,7 +104,7 @@ def test_handle_shot_event_stages_inputs_and_uploads_output(tmp_path: Path) -> N
     assert result["report"]["output"].endswith("output.mp4")
 
     downloaded_keys = [key for key, _destination in storage.downloads]
-    assert "baserender/jobs/job-1/working/proxy-1" in downloaded_keys
+    assert "baserender/jobs/job-1/working/proxy-1.mp4" in downloaded_keys
     assert "baserender/jobs/job-1/inputs/timeline.otio" in downloaded_keys
     assert "baserender/jobs/job-1/inputs/luts/lut-1" in downloaded_keys
 
@@ -114,3 +115,47 @@ def test_handle_shot_event_stages_inputs_and_uploads_output(tmp_path: Path) -> N
     settings = captured["settings"]
     assert settings is not None
     assert settings.clip_luts["/media/shot.mov"].endswith("lut-0.cube")
+
+
+def test_handle_shot_event_emits_failed_event_on_crash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_emit(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("baserender_lambda.handler.emit_shot_complete_event", fake_emit)
+
+    class ExplodingS3Io:
+        def download(self, key: str, destination: Path) -> None:
+            raise RuntimeError("proxy missing")
+
+        def upload(self, path: Path, key: str, *, content_type: str = "video/mp4") -> None:
+            raise AssertionError("should not upload")
+
+    event = LambdaShotEvent.from_mapping(
+        {
+            "job_id": "job-9",
+            "bucket": "test-bucket",
+            "shot_index": 3,
+            "media_url": "/media/shot.mov",
+            "timeline_offset_seconds": 0.0,
+            "source_in_seconds": 0.0,
+            "source_out_seconds": 1.0,
+            "proxy_key": "baserender/jobs/job-9/working/proxy-3",
+            "otio_key": "baserender/jobs/job-9/inputs/timeline.otio",
+            "output_key": "baserender/jobs/job-9/working/shot-3",
+            "settings": {"width": 640, "height": 360, "fps": 24},
+        }
+    )
+
+    result = handle_shot_event(event, s3_io=ExplodingS3Io())
+
+    assert result["status"] == "error"
+    assert result["job_id"] == "job-9"
+    assert "proxy missing" in result["error"]
+    assert captured["status"] == "failed"
+    assert captured["shot_index"] == 3
+    assert "proxy missing" in str(captured["error_message"])

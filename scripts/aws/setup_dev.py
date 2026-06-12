@@ -118,13 +118,9 @@ def _mediaconvert_queue_arn(mediaconvert, account_id: str, region: str) -> str:
         endpoint = endpoints["Endpoints"][0]["Url"]
         os.environ["BASERENDER_MEDIACONVERT_ENDPOINT"] = endpoint
 
-    mc = mediaconvert.__class__(
-        "mediaconvert",
-        region_name=region,
-        endpoint_url=endpoint,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-    )
+    import boto3
+
+    mc = boto3.client("mediaconvert", region_name=region, endpoint_url=endpoint)
     queues = mc.list_queues(MaxResults=20)
     queue_list = queues.get("Queues") or []
     if not queue_list:
@@ -233,13 +229,18 @@ def _ensure_ffmpeg_layer(lambda_client, region: str) -> str | None:
             path = bin_dir / binary
             archive.write(path, f"bin/{binary}")
 
-    with open(zip_path, "rb") as handle:
-        response = lambda_client.publish_layer_version(
-            LayerName=layer_name,
-            Description="Static FFmpeg binaries for BaseRender render Lambda",
-            Content={"ZipFile": handle.read()},
-            CompatibleRuntimes=["python3.11", "python3.12", "python3.13"],
-        )
+    # Publish via S3: the zipped layer exceeds the 70 MB direct-upload request limit.
+    import boto3
+
+    bucket = os.environ["BASERENDER_S3_BUCKET"]
+    layer_key = "baserender/layers/ffmpeg-layer.zip"
+    boto3.client("s3", region_name=region).upload_file(str(zip_path), bucket, layer_key)
+    response = lambda_client.publish_layer_version(
+        LayerName=layer_name,
+        Description="Static FFmpeg binaries for BaseRender render Lambda",
+        Content={"S3Bucket": bucket, "S3Key": layer_key},
+        CompatibleRuntimes=["python3.11", "python3.12", "python3.13"],
+    )
     arn = response["LayerVersionArn"]
     print(f"Published FFmpeg layer: {arn}")
     return arn
@@ -256,6 +257,7 @@ def _deploy_lambda(
     layers: list[str] | None = None,
     timeout: int = 300,
     memory: int = 1024,
+    ephemeral_mb: int = 512,
 ) -> str:
     layers = layers or []
     try:
@@ -271,7 +273,9 @@ def _deploy_lambda(
             MemorySize=memory,
             Environment={"Variables": env},
             Layers=layers,
+            EphemeralStorage={"Size": ephemeral_mb},
         )
+        waiter.wait(FunctionName=name)
         print(f"Updated Lambda: {name}")
     except lambda_client.exceptions.ResourceNotFoundException:
         lambda_client.create_function(
@@ -284,11 +288,51 @@ def _deploy_lambda(
             MemorySize=memory,
             Environment={"Variables": env},
             Layers=layers,
+            EphemeralStorage={"Size": ephemeral_mb},
             Publish=True,
         )
+        waiter = lambda_client.get_waiter("function_active_v2")
+        waiter.wait(FunctionName=name)
         print(f"Created Lambda: {name}")
 
     return lambda_client.get_function(FunctionName=name)["Configuration"]["FunctionArn"]
+
+
+def _ensure_function_url(lambda_client, function_name: str) -> str:
+    try:
+        config = lambda_client.create_function_url_config(
+            FunctionName=function_name,
+            AuthType="NONE",
+            InvokeMode="BUFFERED",
+        )
+        print(f"Created Function URL for {function_name}")
+    except lambda_client.exceptions.ResourceConflictException:
+        config = lambda_client.get_function_url_config(FunctionName=function_name)
+
+    # Function URLs created since Oct 2025 need BOTH InvokeFunctionUrl and
+    # InvokeFunction (scoped to URL invocations) in the resource policy.
+    try:
+        lambda_client.add_permission(
+            FunctionName=function_name,
+            StatementId="function-url-public",
+            Action="lambda:InvokeFunctionUrl",
+            Principal="*",
+            FunctionUrlAuthType="NONE",
+        )
+    except lambda_client.exceptions.ResourceConflictException:
+        pass
+    try:
+        lambda_client.add_permission(
+            FunctionName=function_name,
+            StatementId="function-url-public-invoke",
+            Action="lambda:InvokeFunction",
+            Principal="*",
+            InvokedViaFunctionUrl=True,
+        )
+    except lambda_client.exceptions.ResourceConflictException:
+        pass
+
+    return config["FunctionUrl"]
 
 
 def _lambda_execution_role(iam, account_id: str, bucket: str, event_bus: str) -> str:
@@ -323,8 +367,30 @@ def _lambda_execution_role(iam, account_id: str, bucket: str, event_bus: str) ->
             },
             {
                 "Effect": "Allow",
+                "Action": "s3:ListBucket",
+                "Resource": f"arn:aws:s3:::{bucket}",
+            },
+            {
+                "Effect": "Allow",
                 "Action": "events:PutEvents",
                 "Resource": f"arn:aws:events:*:{account_id}:event-bus/{event_bus}",
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "mediaconvert:CreateJob",
+                    "mediaconvert:GetJob",
+                    "mediaconvert:DescribeEndpoints",
+                ],
+                "Resource": "*",
+            },
+            {
+                "Effect": "Allow",
+                "Action": "iam:PassRole",
+                "Resource": f"arn:aws:iam::{account_id}:role/BaseRenderMediaConvertRole",
+                "Condition": {
+                    "StringEquals": {"iam:PassedToService": "mediaconvert.amazonaws.com"}
+                },
             },
         ],
     }
@@ -366,11 +432,11 @@ def _ensure_eventbridge_rules(
     region: str,
     account_id: str,
     event_source: str,
-    render_arn: str,
-    notifier_arn: str,
+    backend_arn: str,
 ) -> None:
     bus = os.getenv("BASERENDER_EVENT_BUS", "default")
 
+    # All rules target the unified backend Lambda; it routes by detail-type.
     rules = [
         (
             "baserender-mc-complete",
@@ -379,7 +445,7 @@ def _ensure_eventbridge_rules(
                 "detail-type": ["MediaConvert Job State Change"],
                 "detail": {"status": ["COMPLETE", "ERROR", "CANCELED"]},
             },
-            notifier_arn,
+            backend_arn,
         ),
         (
             "baserender-shot-complete",
@@ -387,7 +453,7 @@ def _ensure_eventbridge_rules(
                 "source": [event_source],
                 "detail-type": ["BaseRender Shot Complete"],
             },
-            notifier_arn,
+            backend_arn,
         ),
         (
             "baserender-lambda-shot",
@@ -395,7 +461,7 @@ def _ensure_eventbridge_rules(
                 "source": [event_source],
                 "detail-type": ["BaseRender Lambda Shot"],
             },
-            render_arn,
+            backend_arn,
         ),
     ]
 
@@ -454,7 +520,38 @@ def _validate_credentials(sts) -> str:
         ) from exc
 
 
+def _secret_env(name: str, *, length: int = 32) -> str:
+    """Read a secret from env or generate one (persisted later via _update_env_file)."""
+    import secrets
+
+    value = os.getenv(name, "")
+    if not value:
+        value = secrets.token_hex(length)
+        os.environ[name] = value
+        print(f"Generated {name}")
+    return value
+
+
+def _cleanup_legacy(lambda_client) -> None:
+    for name in ("baserender-render", "baserender-notifier"):
+        try:
+            lambda_client.delete_function(FunctionName=name)
+            print(f"Deleted legacy Lambda: {name}")
+        except lambda_client.exceptions.ResourceNotFoundException:
+            print(f"Legacy Lambda already gone: {name}")
+
+
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--cleanup-legacy",
+        action="store_true",
+        help="Delete the legacy baserender-render/baserender-notifier Lambdas and exit.",
+    )
+    args = parser.parse_args()
+
     _load_env()
     region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
     os.environ.setdefault("AWS_REGION", region)
@@ -465,6 +562,10 @@ def main() -> None:
     clients = _clients(region)
     account_id = _validate_credentials(clients["sts"])
     print(f"AWS account: {account_id} ({region})")
+
+    if args.cleanup_legacy:
+        _cleanup_legacy(clients["lambda"])
+        return
 
     _ensure_bucket(clients["s3"], bucket, region)
     mc_role_arn = _ensure_mediaconvert_role(clients["iam"], account_id, bucket)
@@ -484,38 +585,45 @@ def main() -> None:
     zip_bytes = zip_path.read_bytes()
     ffmpeg_layer = _ensure_ffmpeg_layer(clients["lambda"], region)
 
-    bucket_env = {"BASERENDER_S3_BUCKET": bucket}
     event_env = {
         "BASERENDER_EVENT_BUS": os.getenv("BASERENDER_EVENT_BUS", "default"),
         "BASERENDER_EVENT_SOURCE": os.getenv("BASERENDER_EVENT_SOURCE", "baserender"),
     }
-    worker_token = os.getenv("BASERENDER_WORKER_TOKEN", "")
-    api_base_url = os.getenv("BASERENDER_API_BASE_URL", "")
+    worker_token = _secret_env("BASERENDER_WORKER_TOKEN")
+    proxy_token = _secret_env("BASERENDER_PROXY_TOKEN")
+    auth_password = _secret_env("BASERENDER_AUTH_PASSWORD", length=16)
+    session_secret = _secret_env("BASERENDER_SESSION_SECRET")
 
-    render_arn = _deploy_lambda(
+    backend_env = {
+        "BASERENDER_S3_BUCKET": bucket,
+        "BASERENDER_RENDER_BACKEND": "cloud",
+        "BASERENDER_MEDIACONVERT_ROLE_ARN": mc_role_arn,
+        "BASERENDER_MEDIACONVERT_QUEUE_ARN": queue_arn,
+        "BASERENDER_MEDIACONVERT_ENDPOINT": os.getenv("BASERENDER_MEDIACONVERT_ENDPOINT", ""),
+        **event_env,
+        "BASERENDER_PROXY_TOKEN": proxy_token,
+        "BASERENDER_WORKER_TOKEN": worker_token,
+        "BASERENDER_AUTH_PASSWORD": auth_password,
+        "BASERENDER_SESSION_SECRET": session_secret,
+        "BASERENDER_AUTH_SECURE_COOKIE": "true",
+        "BASERENDER_DISABLE_WORKER_ROUTES": "1",
+    }
+    # AWS_REGION is reserved on Lambda (provided by the runtime); drop empties.
+    backend_env = {key: value for key, value in backend_env.items() if value}
+
+    backend_arn = _deploy_lambda(
         clients["lambda"],
-        name="baserender-render",
-        handler="baserender_lambda.handler.lambda_handler",
+        name="baserender-backend",
+        handler="baserender_lambda.unified.lambda_handler",
         zip_bytes=zip_bytes,
         role_arn=lambda_role_arn,
-        env={**bucket_env, **event_env},
+        env=backend_env,
         layers=[ffmpeg_layer] if ffmpeg_layer else [],
         timeout=900,
         memory=2048,
+        ephemeral_mb=4096,
     )
-    notifier_arn = _deploy_lambda(
-        clients["lambda"],
-        name="baserender-notifier",
-        handler="baserender_lambda.notifier.lambda_handler",
-        zip_bytes=zip_bytes,
-        role_arn=lambda_role_arn,
-        env={
-            "BASERENDER_API_BASE_URL": api_base_url,
-            "BASERENDER_WORKER_TOKEN": worker_token,
-        },
-        timeout=300,
-        memory=1024,
-    )
+    function_url = _ensure_function_url(clients["lambda"], "baserender-backend")
 
     _ensure_eventbridge_rules(
         clients["events"],
@@ -523,8 +631,7 @@ def main() -> None:
         region=region,
         account_id=account_id,
         event_source=event_env["BASERENDER_EVENT_SOURCE"],
-        render_arn=render_arn,
-        notifier_arn=notifier_arn,
+        backend_arn=backend_arn,
     )
 
     env_updates = {
@@ -535,6 +642,10 @@ def main() -> None:
         "BASERENDER_MEDIACONVERT_QUEUE_ARN": queue_arn,
         "BASERENDER_EVENT_BUS": event_env["BASERENDER_EVENT_BUS"],
         "BASERENDER_EVENT_SOURCE": event_env["BASERENDER_EVENT_SOURCE"],
+        "BASERENDER_WORKER_TOKEN": worker_token,
+        "BASERENDER_PROXY_TOKEN": proxy_token,
+        "BASERENDER_AUTH_PASSWORD": auth_password,
+        "BASERENDER_SESSION_SECRET": session_secret,
     }
     _update_env_file(env_updates)
 
@@ -544,18 +655,19 @@ def main() -> None:
         "bucket": bucket,
         "mediaconvert_role_arn": mc_role_arn,
         "mediaconvert_queue_arn": queue_arn,
-        "render_lambda_arn": render_arn,
-        "notifier_lambda_arn": notifier_arn,
+        "backend_lambda_arn": backend_arn,
+        "function_url": function_url,
         "ffmpeg_layer": ffmpeg_layer,
     }
     STATE_PATH.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {STATE_PATH.relative_to(ROOT)}")
 
-    if not api_base_url:
-        print(
-            "\nNext: expose local FastAPI (ngrok/cloudflared) and set BASERENDER_API_BASE_URL "
-            "on baserender-notifier Lambda before cloud render smoke tests."
-        )
+    print(f"\nBackend Function URL: {function_url}")
+    print(
+        "Set BASERENDER_API_PROXY_TARGET to this URL in the Amplify env and redeploy.\n"
+        "After end-to-end verification, retire the legacy Lambdas with: "
+        "python scripts/aws/setup_dev.py --cleanup-legacy"
+    )
 
 
 if __name__ == "__main__":

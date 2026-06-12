@@ -1,0 +1,10 @@
+{
+  "account_id": "046497227399",
+  "region": "eu-west-1",
+  "bucket": "baserender-media-046497227399",
+  "mediaconvert_role_arn": "arn:aws:iam::046497227399:role/BaseRenderMediaConvertRole",
+  "mediaconvert_queue_arn": "arn:aws:mediaconvert:eu-west-1:046497227399:queues/Default",
+  "backend_lambda_arn": "arn:aws:lambda:eu-west-1:046497227399:function:baserender-backend",
+  "function_url": "https://6muu27qgknj7tiqmzvijhrnfka0simfs.lambda-url.eu-west-1.on.aws/",
+  "ffmpeg_layer": "arn:aws:lambda:eu-west-1:046497227399:layer:baserender-ffmpeg:1"
+}

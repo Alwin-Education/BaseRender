@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -10,6 +11,7 @@ from typing import Any
 from baserender.ffmpeg_builder import FFmpegCommand
 from baserender.render import render_otio
 from baserender.report import RenderReport
+from baserender.timeline_model import normalize_target_url
 
 from baserender_lambda.events import LambdaShotEvent
 from baserender_lambda.notify import emit_shot_complete_event
@@ -39,6 +41,26 @@ def handle_shot_event(
     )
     try:
         return _run_shot_render(shot_event, storage, workspace, render_fn=render_fn)
+    except Exception as exc:
+        # Report the failure to the orchestrator; a swallowed crash would leave
+        # the job stuck "running" until the stale timeout.
+        logging.getLogger(__name__).exception(
+            "Shot render failed (job %s, shot %s)", shot_event.job_id, shot_event.shot_index
+        )
+        emit_shot_complete_event(
+            job_id=shot_event.job_id,
+            shot_index=shot_event.shot_index,
+            output_key="",
+            status="failed",
+            bucket=shot_event.bucket,
+            error_message=f"Lambda shot render failed: {exc}",
+        )
+        return {
+            "status": "error",
+            "job_id": shot_event.job_id,
+            "shot_index": shot_event.shot_index,
+            "error": str(exc),
+        }
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
@@ -56,7 +78,9 @@ def _run_shot_render(
     timeline_path = workspace / "timeline.otio"
     output_path = workspace / f"output.{container}"
 
-    storage.download(shot_event.proxy_key, proxy_path)
+    # MediaConvert appends the container extension to its destination prefix,
+    # so the truncated proxy lands at proxy_key + ".<container>".
+    storage.download(_output_object_key(shot_event.proxy_key, container=container), proxy_path)
     storage.download(shot_event.otio_key, otio_path)
 
     clip_luts = _download_luts(storage, shot_event, workspace)
@@ -67,6 +91,11 @@ def _run_shot_render(
         source_in_seconds=shot_event.source_in_seconds,
         dest_path=timeline_path,
     )
+    # The shot timeline's clip now points at the local proxy, and the renderer
+    # matches clip_luts by that URL — re-key this shot's LUT accordingly.
+    shot_lut = clip_luts.get(shot_event.media_url)
+    if shot_lut is not None:
+        clip_luts[normalize_target_url(str(proxy_path))] = shot_lut
 
     settings = parse_render_settings(shot_event.settings, clip_luts=clip_luts)
     _command, report = render_fn(

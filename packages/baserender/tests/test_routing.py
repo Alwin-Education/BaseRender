@@ -39,7 +39,9 @@ def test_no_lut_simple_cuts_routes_to_full_mediaconvert() -> None:
     assert len(routing.shots) == 2
 
 
-def test_one_lut_across_all_clips_routes_to_full_mediaconvert() -> None:
+def test_one_lut_across_all_clips_routes_to_hybrid() -> None:
+    # MediaConvert silently skips same-color-space 3D LUTs, so any shot with a
+    # LUT must render on Lambda FFmpeg (see LAMBDA_ON_LUT in routing.py).
     plan = _simple_plan(
         ClipSegment(
             "A",
@@ -59,12 +61,14 @@ def test_one_lut_across_all_clips_routes_to_full_mediaconvert() -> None:
 
     routing = classify_timeline(plan)
 
-    assert routing.route is RouteKind.FULL_MEDIACONVERT
+    assert routing.route is RouteKind.HYBRID
     assert routing.distinct_lut_count == 1
-    assert routing.requires_final_stitch is False
+    assert routing.requires_final_stitch is True
+    assert all(shot.handler is ShotHandler.LAMBDA_FFMPEG for shot in routing.shots)
+    assert all("lut" in shot.reasons for shot in routing.shots)
 
 
-def test_multiple_luts_routes_to_per_shot_mediaconvert() -> None:
+def test_multiple_luts_routes_to_hybrid() -> None:
     plan = _simple_plan(
         ClipSegment(
             "A",
@@ -84,10 +88,10 @@ def test_multiple_luts_routes_to_per_shot_mediaconvert() -> None:
 
     routing = classify_timeline(plan)
 
-    assert routing.route is RouteKind.PER_SHOT_MEDIACONVERT
+    assert routing.route is RouteKind.HYBRID
     assert routing.distinct_lut_count == 2
     assert routing.requires_final_stitch is True
-    assert all(shot.handler is ShotHandler.MEDIACONVERT for shot in routing.shots)
+    assert all(shot.handler is ShotHandler.LAMBDA_FFMPEG for shot in routing.shots)
 
 
 def test_keyframed_clip_routes_to_hybrid() -> None:
@@ -213,7 +217,8 @@ def test_mixed_lut_and_keyframed_shot_routes_to_hybrid_with_timing() -> None:
 
     assert routing.route is RouteKind.HYBRID
     assert routing.distinct_lut_count == 2
-    assert routing.shots[0].handler is ShotHandler.MEDIACONVERT
+    assert routing.shots[0].handler is ShotHandler.LAMBDA_FFMPEG
+    assert routing.shots[0].reasons == ("lut",)
     assert routing.shots[0].timeline_offset_seconds == 0.0
     assert routing.shots[0].source_in_seconds == 1.0
     assert routing.shots[0].source_out_seconds == 3.0
@@ -223,6 +228,7 @@ def test_mixed_lut_and_keyframed_shot_routes_to_hybrid_with_timing() -> None:
     assert routing.shots[1].source_in_seconds == 0.5
     assert routing.shots[1].source_out_seconds == 3.5
     assert "keyframes" in routing.shots[1].reasons
+    assert "lut" in routing.shots[1].reasons
 
 
 def test_static_transform_routes_shot_to_lambda() -> None:

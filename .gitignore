@@ -12,6 +12,8 @@ build/
 apps/api/.env
 apps/worker/.env
 apps/web/.env
+.env
+.env.amplify
 
 # Local runtime job artifacts (inputs, reports, job state) - may contain
 # local file paths and presigned media URLs; never commit these.
